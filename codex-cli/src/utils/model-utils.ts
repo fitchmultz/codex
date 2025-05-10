@@ -2,6 +2,7 @@ import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
 import { approximateTokensUsed } from "./approximate-tokens-used.js";
 import { getApiKey } from "./config.js";
+import { makeGeminiClient } from "./genaiClient.js";
 import { type SupportedModelId, openAiModelInfo } from "./model-info.js";
 import { createOpenAIClient } from "./openai-client.js";
 
@@ -16,6 +17,23 @@ export const RECOMMENDED_MODELS: Array<string> = ["o4-mini", "o3"];
  * lifetime of the process and the results are cached for subsequent calls.
  */
 async function fetchModels(provider: string): Promise<Array<string>> {
+  const lower = provider.toLowerCase();
+  // For Gemini, use the Google GenAI client directly
+  if (lower === "gemini") {
+    const genai = makeGeminiClient();
+    const pager = await genai.models.list();
+    const models: Array<string> = [];
+    for await (const m of pager) {
+      // Model items have a `.name` field for Gemini
+      const name = (m as { name?: unknown }).name;
+      if (typeof name === "string") {
+        models.push(
+          name.startsWith("models/") ? name.replace("models/", "") : name,
+        );
+      }
+    }
+    return models.sort();
+  }
   // If the user has not configured an API key we cannot retrieve the models.
   if (!getApiKey(provider)) {
     throw new Error("No API key configured for provider: " + provider);
