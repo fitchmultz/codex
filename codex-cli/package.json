@@ -26,6 +26,7 @@
     "dist"
   ],
   "dependencies": {
+    "@google/genai": "^0.13.0",
     "@inkjs/ui": "^2.0.0",
     "chalk": "^5.2.0",
     "diff": "^7.0.0",
