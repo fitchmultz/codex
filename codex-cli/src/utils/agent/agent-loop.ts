@@ -715,11 +715,18 @@ export class AgentLoop {
               this.config.provider?.toLowerCase() === "openai"
                 ? (params: ResponseCreateParams) =>
                     this.oai.responses.create(params)
-                : (params: ResponseCreateParams) =>
-                    responsesCreateViaChatCompletions(
-                      this.oai,
-                      params as ResponseCreateParams & { stream: true },
-                    );
+                : this.config.provider?.toLowerCase() === "gemini"
+                  ? (params: ResponseCreateParams & { stream: true }) =>
+                      import("../responses.genai.js").then((m) =>
+                        m.responsesCreateViaGemini(
+                          params as ResponseCreateParams & { stream: true },
+                        ),
+                      )
+                  : (params: ResponseCreateParams) =>
+                      responsesCreateViaChatCompletions(
+                        this.oai,
+                        params as ResponseCreateParams & { stream: true },
+                      );
             log(
               `instructions (length ${mergedInstructions.length}): ${mergedInstructions}`,
             );
