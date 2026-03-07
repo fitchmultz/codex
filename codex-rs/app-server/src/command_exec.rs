@@ -593,26 +593,26 @@ fn spawn_process_output(params: SpawnProcessOutputParams) -> tokio::task::JoinHa
                 None => chunk.as_slice(),
             };
             let cap_reached = Some(observed_num_bytes) == output_bytes_cap;
-            if let (true, Some(process_id)) = (stream_output, process_id.as_ref()) {
-                outgoing
-                    .send_server_notification_to_connections(
-                        &[connection_id],
-                        ServerNotification::CommandExecOutputDelta(
-                            CommandExecOutputDeltaNotification {
-                                process_id: process_id.clone(),
-                                stream,
-                                delta_base64: STANDARD.encode(capped_chunk),
-                                cap_reached,
-                            },
-                        ),
-                    )
-                    .await;
-            } else if !stream_output {
-                buffer.extend_from_slice(capped_chunk);
+            if !capped_chunk.is_empty() {
+                if let (true, Some(process_id)) = (stream_output, process_id.as_ref()) {
+                    outgoing
+                        .send_server_notification_to_connections(
+                            &[connection_id],
+                            ServerNotification::CommandExecOutputDelta(
+                                CommandExecOutputDeltaNotification {
+                                    process_id: process_id.clone(),
+                                    stream,
+                                    delta_base64: STANDARD.encode(capped_chunk),
+                                    cap_reached,
+                                },
+                            ),
+                        )
+                        .await;
+                } else if !stream_output {
+                    buffer.extend_from_slice(capped_chunk);
+                }
             }
-            if cap_reached {
-                break;
-            }
+            // Continue draining to EOF after hitting the cap to avoid back-pressure.
         }
         bytes_to_string_smart(&buffer)
     })
@@ -707,9 +707,7 @@ mod tests {
     use codex_protocol::protocol::ReadOnlyAccess;
     use codex_protocol::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
-    #[cfg(not(target_os = "windows"))]
     use tokio::time::Duration;
-    #[cfg(not(target_os = "windows"))]
     use tokio::time::timeout;
     #[cfg(not(target_os = "windows"))]
     use tokio_util::sync::CancellationToken;
@@ -900,6 +898,104 @@ mod tests {
         assert_eq!(response.stdout, "");
         // The deferred response now drains any already-emitted stderr before
         // replying, so shell startup noise is allowed here.
+    }
+
+    #[tokio::test]
+    async fn capped_output_continues_draining_until_channel_closes() {
+        let (outgoing_tx, _outgoing_rx) = mpsc::channel(1);
+        let (output_tx, output_rx) = mpsc::channel(1);
+        let (_stdio_timeout_tx, stdio_timeout_rx) = watch::channel(false);
+        let handle = spawn_process_output(SpawnProcessOutputParams {
+            connection_id: ConnectionId(14),
+            process_id: Some("proc-14".to_string()),
+            output_rx,
+            stdio_timeout_rx,
+            outgoing: Arc::new(OutgoingMessageSender::new(outgoing_tx)),
+            stream: CommandExecOutputStream::Stdout,
+            stream_output: false,
+            output_bytes_cap: Some(5),
+        });
+
+        timeout(Duration::from_secs(1), output_tx.send(b"abcdef".to_vec()))
+            .await
+            .expect("timed out sending first chunk")
+            .expect("receiver should accept the first chunk");
+        timeout(Duration::from_secs(1), output_tx.send(b"ghijkl".to_vec()))
+            .await
+            .expect("timed out sending second chunk")
+            .expect("receiver should keep draining after the cap is reached");
+        drop(output_tx);
+
+        let output = timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("timed out waiting for output task")
+            .expect("output task should join successfully");
+        assert_eq!(output, "abcde");
+    }
+
+    #[tokio::test]
+    async fn streaming_output_continues_draining_after_output_cap() {
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(4);
+        let (output_tx, output_rx) = mpsc::channel(1);
+        let (_stdio_timeout_tx, stdio_timeout_rx) = watch::channel(false);
+        let handle = spawn_process_output(SpawnProcessOutputParams {
+            connection_id: ConnectionId(15),
+            process_id: Some("proc-15".to_string()),
+            output_rx,
+            stdio_timeout_rx,
+            outgoing: Arc::new(OutgoingMessageSender::new(outgoing_tx)),
+            stream: CommandExecOutputStream::Stdout,
+            stream_output: true,
+            output_bytes_cap: Some(5),
+        });
+
+        timeout(Duration::from_secs(1), output_tx.send(b"abcdef".to_vec()))
+            .await
+            .expect("timed out sending first chunk")
+            .expect("receiver should accept the first chunk");
+        timeout(Duration::from_secs(1), output_tx.send(b"ghijkl".to_vec()))
+            .await
+            .expect("timed out sending second chunk")
+            .expect("receiver should keep draining after the cap is reached");
+        drop(output_tx);
+
+        let envelope = timeout(Duration::from_secs(1), outgoing_rx.recv())
+            .await
+            .expect("timed out waiting for streamed output")
+            .expect("channel closed before streamed output was sent");
+        let OutgoingEnvelope::ToConnection {
+            connection_id,
+            message,
+        } = envelope
+        else {
+            panic!("expected connection-scoped outgoing message");
+        };
+        assert_eq!(connection_id, ConnectionId(15));
+        let OutgoingMessage::AppServerNotification(ServerNotification::CommandExecOutputDelta(
+            delta,
+        )) = message
+        else {
+            panic!("expected command/exec output delta notification");
+        };
+        assert_eq!(delta.process_id, "proc-15");
+        assert_eq!(delta.stream, CommandExecOutputStream::Stdout);
+        assert_eq!(
+            STANDARD.decode(delta.delta_base64).expect("valid base64"),
+            b"abcde"
+        );
+        assert!(delta.cap_reached);
+        let output = timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("timed out waiting for output task")
+            .expect("output task should join successfully");
+        assert_eq!(output, "");
+        let extra_message = timeout(Duration::from_millis(100), outgoing_rx.recv())
+            .await
+            .expect("timed out waiting for channel closure or an unexpected extra notification");
+        assert!(
+            extra_message.is_none(),
+            "post-cap chunks should be drained without sending extra notifications",
+        );
     }
 
     #[tokio::test]
