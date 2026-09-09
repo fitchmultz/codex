@@ -718,6 +718,13 @@ async fn load_config_resolves_token_budget_config() -> std::io::Result<()> {
             None,
         ),
         (
+            "[features.token_budget]\nenabled = true\nlocal_recovery_hook = 'local-hook:PreCompact:0:0'\n",
+            Some(TokenBudgetConfig {
+                local_recovery_hook: Some("local-hook:PreCompact:0:0".to_string()),
+                ..Default::default()
+            }),
+        ),
+        (
             r#"
 [features.token_budget]
 enabled = true
@@ -730,6 +737,7 @@ auto_compact_fallback_buffer_tokens = 8000
 "#,
             Some(TokenBudgetConfig {
                 use_history_notes_extension: true,
+                local_recovery_hook: None,
                 reminder_threshold_tokens: Some(16_000),
                 reminder_message_template: "Custom reminder: {n_remaining} tokens.".to_string(),
                 guidance_message: Some("Preserve important state before compaction.".to_string()),
@@ -755,6 +763,30 @@ auto_compact_fallback_buffer_tokens = 8000
             assert!(config.features.enabled(Feature::ContextManagement));
         }
         assert_eq!(config.token_budget, expected);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_rejects_incompatible_local_recovery() -> std::io::Result<()> {
+    for settings in [
+        "local_recovery_hook = '  '",
+        "local_recovery_hook = 'checkpoint'\nuse_history_notes_extension = true",
+    ] {
+        let codex_home = tempdir()?;
+        let config_toml = toml::from_str(&format!(
+            "[features.token_budget]\nenabled = true\n{settings}\n"
+        ))
+        .expect("TOML should deserialize");
+        let error = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await
+        .expect_err("invalid local recovery configuration must be rejected");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("local_recovery_hook"));
     }
     Ok(())
 }

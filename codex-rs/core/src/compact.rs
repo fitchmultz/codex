@@ -103,7 +103,11 @@ pub(crate) async fn build_compaction_initial_context(
             step_context,
         } => {
             let items = sess
-                .build_initial_context_with_world_state(step_context, world_state.as_ref())
+                .build_initial_context_with_world_state(
+                    step_context,
+                    world_state.as_ref(),
+                    /*recovery_hint*/ None,
+                )
                 .await;
             (
                 items.into_iter().map(ResponseItemEnvelope::new).collect(),

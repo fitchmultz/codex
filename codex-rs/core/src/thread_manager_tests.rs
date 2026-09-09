@@ -601,7 +601,11 @@ async fn ignores_session_prefix_messages_when_truncating() {
     let world_state = build_world_state_from_turn_context(&session, &turn_context).await;
     let step_context = StepContext::for_test(turn_context);
     let mut items = session
-        .build_initial_context_with_world_state(&step_context, &world_state)
+        .build_initial_context_with_world_state(
+            &step_context,
+            &world_state,
+            /*recovery_hint*/ None,
+        )
         .await;
     items.push(user_msg("feature request"));
     items.push(assistant_msg("ack"));
@@ -1207,7 +1211,11 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
     let reviewer_context = reviewer
         .thread
         .session
-        .build_initial_context_with_world_state(&reviewer_step, &reviewer_world_state)
+        .build_initial_context_with_world_state(
+            &reviewer_step,
+            &reviewer_world_state,
+            /*recovery_hint*/ None,
+        )
         .await;
     assert!(
         !serde_json::to_string(&reviewer_context)

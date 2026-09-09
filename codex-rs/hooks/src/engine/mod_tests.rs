@@ -90,6 +90,7 @@ fn permission_request_timeout_only_counts_synchronous_handlers() {
     );
     let command = "echo synchronous permission hook";
     let synchronous_handler = ConfiguredHandler {
+        key: None,
         builtin: false,
         event_name: HookEventName::PermissionRequest,
         matcher: None,
@@ -2312,6 +2313,7 @@ fn executor_stop_hook_fixture() -> (
     assert_eq!(
         engine.handlers,
         vec![ConfiguredHandler {
+            key: None,
             builtin: true,
             event_name: HookEventName::Stop,
             matcher: None,
@@ -2401,6 +2403,7 @@ async fn executor_stop_hooks_run_unless_regular_hooks_block_without_stopping() {
     );
 
     engine.handlers.push(ConfiguredHandler {
+        key: None,
         builtin: false,
         event_name: HookEventName::Stop,
         matcher: None,
@@ -2436,6 +2439,7 @@ async fn executor_stop_hooks_run_unless_regular_hooks_block_without_stopping() {
     );
 
     engine.handlers.push(ConfiguredHandler {
+        key: None,
         builtin: false,
         event_name: HookEventName::Stop,
         matcher: None,

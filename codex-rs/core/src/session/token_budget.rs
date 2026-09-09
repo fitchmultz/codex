@@ -50,10 +50,10 @@ pub(super) fn apply_experimental_context(
         config.token_budget = resolve_token_budget_config(&config_toml, &config.features)?;
     }
 
-    config
-        .token_budget
-        .get_or_insert_default()
-        .use_history_notes_extension = true;
+    let token_budget = config.token_budget.get_or_insert_default();
+    if token_budget.local_recovery_hook.is_none() {
+        token_budget.use_history_notes_extension = true;
+    }
     Ok(())
 }
 
@@ -98,6 +98,8 @@ pub(super) fn resolve_token_budget(
     let token_budget = TokenBudgetConfig {
         use_history_notes_extension: configured_token_budget
             .is_some_and(|token_budget| token_budget.use_history_notes_extension),
+        local_recovery_hook: configured_token_budget
+            .and_then(|token_budget| token_budget.local_recovery_hook.clone()),
         reminder_threshold_tokens: Some(model_defaults.reminder_threshold_tokens),
         reminder_message_template: model_defaults.reminder_message_template.clone(),
         guidance_message: Some(model_defaults.guidance_message.clone()),
