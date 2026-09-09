@@ -57,6 +57,8 @@ pub(crate) struct CommandShell {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfiguredHandler {
+    /// Stable configuration key; synthetic executor hooks are not user-selectable.
+    pub key: Option<String>,
     /// Internally admitted cleanup hook, enabled independently of per-hook state.
     pub builtin: bool,
     pub event_name: codex_protocol::protocol::HookEventName,
@@ -318,6 +320,7 @@ impl ClaudeHooksEngine {
                     continue;
                 }
                 self.handlers.push(ConfiguredHandler {
+                    key: None,
                     builtin: true,
                     event_name,
                     matcher: None,

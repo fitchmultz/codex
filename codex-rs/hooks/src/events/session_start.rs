@@ -540,6 +540,7 @@ mod tests {
 
     fn handler_for(event_name: HookEventName) -> ConfiguredHandler {
         ConfiguredHandler {
+            key: None,
             builtin: false,
             event_name,
             matcher: None,

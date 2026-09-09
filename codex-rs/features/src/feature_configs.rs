@@ -320,6 +320,11 @@ pub struct TokenBudgetConfigToml {
     /// Whether to expose the built-in history and notes extension.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub use_history_notes_extension: Option<bool>,
+    /// Opts into local recovery using this trusted synchronous PreCompact hook key from
+    /// hooks/list. Keeps manual summarization and cancels explicit resets after failed tools.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1))]
+    pub local_recovery_hook: Option<String>,
     /// Number of tokens remaining before auto-compaction when the wrap-up reminder is emitted.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1))]

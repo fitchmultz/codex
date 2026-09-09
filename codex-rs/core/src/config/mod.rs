@@ -1149,6 +1149,7 @@ const AUTO_COMPACT_FALLBACK_PROMPT_MAX_BYTES: usize = 2000;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TokenBudgetConfig {
     pub use_history_notes_extension: bool,
+    pub local_recovery_hook: Option<String>,
     pub reminder_threshold_tokens: Option<i64>,
     pub reminder_message_template: String,
     pub guidance_message: Option<String>,
@@ -1158,6 +1159,14 @@ pub struct TokenBudgetConfig {
 
 impl TokenBudgetConfig {
     pub(crate) fn validate(&self) -> std::io::Result<()> {
+        if let Some(hook) = &self.local_recovery_hook
+            && (hook.trim().is_empty() || self.use_history_notes_extension)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "features.token_budget.local_recovery_hook requires a nonempty hook key and use_history_notes_extension = false",
+            ));
+        }
         if self
             .reminder_threshold_tokens
             .is_some_and(|tokens| tokens <= 0)
@@ -1242,6 +1251,7 @@ impl Default for TokenBudgetConfig {
     fn default() -> Self {
         Self {
             use_history_notes_extension: false,
+            local_recovery_hook: None,
             reminder_threshold_tokens: None,
             reminder_message_template: DEFAULT_TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE.to_string(),
             guidance_message: None,
@@ -2792,6 +2802,8 @@ pub(crate) fn resolve_token_budget_config(
     let use_history_notes_extension = token_budget_config
         .and_then(|config| config.use_history_notes_extension)
         .unwrap_or_default();
+    let local_recovery_hook =
+        token_budget_config.and_then(|config| config.local_recovery_hook.clone());
     let reminder_threshold_tokens =
         token_budget_config.and_then(|config| config.reminder_threshold_tokens);
     let reminder_message_template = token_budget_config
@@ -2810,6 +2822,7 @@ pub(crate) fn resolve_token_budget_config(
 
     let token_budget = TokenBudgetConfig {
         use_history_notes_extension,
+        local_recovery_hook,
         reminder_threshold_tokens,
         reminder_message_template,
         guidance_message,

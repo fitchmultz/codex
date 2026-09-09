@@ -365,6 +365,61 @@ async fn experimental_context_requires_capable_model_and_codex_backend(
     Ok(())
 }
 
+#[test_case("enabled = true\nlocal_recovery_hook = 'local-checkpoint'", None; "local recovery stays local")]
+#[test_case("enabled = true", Some(true); "remote experiment stays enabled")]
+#[test_case("enabled = false\nlocal_recovery_hook = 'local-checkpoint'", None; "deferred local activation stays local")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_recovery_prevents_experimental_remote_history_activation(
+    token_budget_toml: &'static str,
+    expected_ingest: Option<bool>,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let response = mount_sse_once(&server, sse_completed("response")).await;
+    let backend_url = format!("{}/backend-api/codex", server.uri());
+    let test = test_codex()
+        .with_model_info_override("gpt-5.2", |model| {
+            model.supports_experimental_context = true
+        })
+        .with_auth(CodexAuth::from_external_chatgpt_tokens(
+            "header.e30.signature",
+            "account-123",
+            Some("plus"),
+        )?)
+        .with_pre_build_hook(move |home| {
+            std::fs::write(
+                home.join("config.toml"),
+                format!("[features.token_budget]\n{token_budget_toml}\n"),
+            )
+            .expect("write token-budget activation configuration");
+        })
+        .with_config(move |config| {
+            config.model_provider.base_url = Some(backend_url);
+            config.model_context_window = Some(CONFIGURED_CONTEXT_WINDOW);
+            config
+                .features
+                .enable(Feature::ContextManagement)
+                .expect("enable context-management activation");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_turn("Preserve the selected recovery mode.")
+        .await?;
+    test.codex.shutdown_and_wait().await?;
+    let request = response.single_request();
+    let metadata: Value = serde_json::from_str(
+        request.body_json()["client_metadata"]["x-codex-turn-metadata"]
+            .as_str()
+            .expect("turn metadata"),
+    )?;
+    assert_eq!(
+        metadata["history_ingest_requested"].as_bool(),
+        expected_ingest
+    );
+    assert_eq!(token_budget_contexts(&request).len(), 1);
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn token_budget_uses_model_message_defaults() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -1034,6 +1089,100 @@ async fn get_context_remaining_returns_unknown_when_threshold_is_unbounded() -> 
         ))
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_recovery_manual_compact_uses_normal_summarization() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let summary = "MANUAL_REMOTE_COMPACTION_SUMMARY";
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("before", "work before compact"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-compact"),
+                json!({"type": "response.output_item.done", "item": {
+                    "type": "compaction", "encrypted_content": summary
+                }}),
+                ev_completed("resp-compact"),
+            ]),
+            sse(vec![
+                ev_assistant_message("after", "work after compact"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let mut provider = built_in_model_providers(/*openai_base_url*/ None)["openai"].clone();
+    provider.base_url = Some(format!("{}/v1", server.uri()));
+    provider.supports_websockets = false;
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider = provider;
+            config.model_context_window = Some(CONFIGURED_CONTEXT_WINDOW);
+            config
+                .features
+                .enable(Feature::TokenBudget)
+                .expect("enable local token-budget mode");
+            config.token_budget = Some(TokenBudgetConfig {
+                local_recovery_hook: Some("unused-for-manual-summary".to_string()),
+                ..Default::default()
+            });
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_turn("before compact").await?;
+    test.codex.submit(Op::Compact).await?;
+    let mut compaction_events = Vec::new();
+    loop {
+        let event = test.codex.next_event().await?;
+        let completed = matches!(&event.msg, EventMsg::TurnComplete(_));
+        compaction_events.push(event.msg);
+        if completed {
+            break;
+        }
+    }
+    test.submit_turn("after compact").await?;
+    test.codex.shutdown_and_wait().await?;
+    assert!(
+        compaction_events.iter().any(|event| matches!(
+            event,
+            EventMsg::ItemStarted(ItemStartedEvent {
+                item: TurnItem::ContextCompaction(_),
+                ..
+            })
+        )),
+        "compaction must start: {compaction_events:?}"
+    );
+    assert!(
+        compaction_events.iter().any(|event| matches!(
+            event,
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::ContextCompaction(_),
+                ..
+            })
+        )),
+        "compaction must complete: {compaction_events:?}"
+    );
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[1].path(), "/v1/responses");
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| !request.inputs_of_type("compaction_trigger").is_empty())
+            .count(),
+        1
+    );
+    assert_eq!(
+        requests[2].inputs_of_type("compaction")[0]["encrypted_content"].as_str(),
+        Some(summary)
+    );
     Ok(())
 }
 

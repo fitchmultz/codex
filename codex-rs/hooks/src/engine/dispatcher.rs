@@ -350,6 +350,7 @@ mod tests {
         display_order: i64,
     ) -> ConfiguredHandler {
         ConfiguredHandler {
+            key: None,
             builtin: false,
             event_name,
             matcher: matcher.map(str::to_owned),

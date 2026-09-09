@@ -3793,6 +3793,11 @@
           "maxLength": 2000,
           "type": "string"
         },
+        "local_recovery_hook": {
+          "description": "Opts into local recovery using this trusted synchronous PreCompact hook key from hooks/list. Keeps manual summarization and cancels explicit resets after failed tools.",
+          "minLength": 1,
+          "type": "string"
+        },
         "reminder_message_template": {
           "description": "Reminder template. `{n_remaining}` is replaced with the tokens remaining before auto-compaction.",
           "maxLength": 2000,

@@ -694,7 +694,7 @@ fn append_matcher_groups(
 
             hook_entries.push(HookListEntry {
                 builtin,
-                key,
+                key: key.clone(),
                 event_name,
                 handler,
                 matcher: matcher.map(ToOwned::to_owned),
@@ -718,6 +718,7 @@ fn append_matcher_groups(
                     ))
             {
                 handlers.push(ConfiguredHandler {
+                    key: Some(key),
                     builtin,
                     event_name,
                     matcher: matcher.map(ToOwned::to_owned),
@@ -1254,6 +1255,12 @@ mod tests {
         assert_eq!(
             handlers,
             vec![ConfiguredHandler {
+                key: Some(crate::hook_key(
+                    &source_path.display().to_string(),
+                    HookEventName::UserPromptSubmit,
+                    /*group_index*/ 0,
+                    /*handler_index*/ 0,
+                )),
                 builtin: false,
                 event_name: HookEventName::UserPromptSubmit,
                 matcher: None,
@@ -1294,6 +1301,12 @@ mod tests {
         assert_eq!(
             handlers,
             vec![ConfiguredHandler {
+                key: Some(crate::hook_key(
+                    &source_path.display().to_string(),
+                    HookEventName::PreToolUse,
+                    /*group_index*/ 0,
+                    /*handler_index*/ 0,
+                )),
                 builtin: false,
                 event_name: HookEventName::PreToolUse,
                 matcher: Some("^Bash$".to_string()),

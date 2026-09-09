@@ -530,6 +530,28 @@ pub(crate) async fn run_pre_compact_hooks(
     turn_context: &Arc<TurnContext>,
     trigger: CompactionTrigger,
 ) -> PreCompactHookOutcome {
+    let required_hook_key = if matches!(trigger, CompactionTrigger::Auto) {
+        turn_context
+            .config
+            .token_budget
+            .as_ref()
+            .and_then(|budget| budget.local_recovery_hook.clone())
+    } else {
+        None
+    };
+    let requires_recovery = required_hook_key.is_some();
+    if requires_recovery && let Err(error) = sess.flush_rollout().await {
+        tracing::warn!(%error, "failed to flush transcript before required recovery hook");
+        sess.send_event(
+            turn_context,
+            EventMsg::Warning(WarningEvent {
+                message: "The transcript could not be saved for recovery; context was not reset."
+                    .to_string(),
+            }),
+        )
+        .await;
+        return PreCompactHookOutcome::Stopped;
+    }
     let request = codex_hooks::PreCompactRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
@@ -539,6 +561,7 @@ pub(crate) async fn run_pre_compact_hooks(
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info().slug.clone(),
         trigger: compaction_trigger_label(trigger).to_string(),
+        required_hook_key,
     };
     let preview_runs = sess.hooks().preview_pre_compact(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
@@ -546,6 +569,10 @@ pub(crate) async fn run_pre_compact_hooks(
     let outcome = sess.hooks().run_pre_compact(request).await;
     emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
     if outcome.should_stop {
+        if requires_recovery && let Some(message) = outcome.stop_reason {
+            sess.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
+                .await;
+        }
         PreCompactHookOutcome::Stopped
     } else {
         PreCompactHookOutcome::Continue

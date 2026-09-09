@@ -3984,6 +3984,7 @@ impl Session {
         &self,
         step_context: &StepContext,
         world_state: &WorldState,
+        recovery_hint: Option<String>,
     ) -> Vec<ResponseItem> {
         let turn_context = step_context.turn.as_ref();
         let mut developer_sections = Vec::<RenderedFragment>::with_capacity(8);
@@ -4083,12 +4084,15 @@ impl Session {
         {
             // Keep the legacy bridge hint when native Notes is disabled. A failed
             // native request must not fall back to the bridge.
-            if !turn_context
+            if let Some(recovery_hint) = recovery_hint {
+                context_window_hints.push(recovery_hint);
+            } else if !turn_context
                 .config
                 .token_budget
                 .as_ref()
                 .is_some_and(|config| config.use_history_notes_extension)
-                && let Some(mcp_result) = self
+            {
+                let result = self
                     .services
                     .mcp_runtime
                     .latest_call_tool(
@@ -4102,22 +4106,47 @@ impl Session {
                         /*requested_timeout*/ None,
                         /*wait_for_server*/ true,
                     )
-                    .await
-                    .ok()
-                    .and_then(|result| {
-                        let text = result
-                            .content
-                            .iter()
-                            .filter_map(|content| {
-                                content.get("text").and_then(serde_json::Value::as_str)
-                            })
-                            .filter(|text| !text.is_empty())
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        (!text.is_empty()).then_some(text)
-                    })
-            {
-                context_window_hints.push(mcp_result);
+                    .await;
+                if step_context
+                    .token_budget
+                    .as_ref()
+                    .is_some_and(|budget| budget.local_recovery_hook.is_some())
+                {
+                    let hint = result
+                        .map_err(|error| {
+                            tracing::warn!(%error, "local recovery hint unavailable during context loading");
+                            "Recovery notes are unavailable. Check the notes server and retry."
+                        })
+                        .and_then(|result| crate::compact_token_budget::validated_local_recovery_hint(&result));
+                    match hint {
+                        Ok(text) => context_window_hints.push(text),
+                        Err(message) => {
+                            self.send_event(
+                                turn_context,
+                                EventMsg::Warning(WarningEvent {
+                                    message: format!(
+                                        "Saved recovery hint was not loaded: {message}"
+                                    ),
+                                }),
+                            )
+                            .await;
+                            context_window_hints.push("The saved recovery hint was not loaded. Read durable notes and original history before continuing earlier work.".to_string());
+                        }
+                    }
+                } else if let Ok(result) = result {
+                    let text = result
+                        .content
+                        .iter()
+                        .filter_map(|content| {
+                            content.get("text").and_then(serde_json::Value::as_str)
+                        })
+                        .filter(|text| !text.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if !text.is_empty() {
+                        context_window_hints.push(text);
+                    }
+                }
             }
             separate_developer_sections.push(
                 crate::context::TokenBudgetContext::new(
@@ -4274,6 +4303,7 @@ impl Session {
         &self,
         step_context: &StepContext,
         world_state: Arc<WorldState>,
+        recovery_hint: Option<String>,
     ) -> u64 {
         let turn_context = step_context.turn.as_ref();
         let retained_client_developer_messages =
@@ -4299,7 +4329,11 @@ impl Session {
         };
         let (window_number, window_ids) = window;
         let context_items = self
-            .build_initial_context_with_world_state(step_context, world_state.as_ref())
+            .build_initial_context_with_world_state(
+                step_context,
+                world_state.as_ref(),
+                recovery_hint,
+            )
             .await
             .into_iter()
             .map(ResponseItemEnvelope::new)
@@ -4358,7 +4392,11 @@ impl Session {
         // Full initial context resets the baseline; later turns persist only its changes.
         let (mut context_items, world_state_item) = if should_inject_full_context {
             let context_items = self
-                .build_initial_context_with_world_state(step_context, world_state.as_ref())
+                .build_initial_context_with_world_state(
+                    step_context,
+                    world_state.as_ref(),
+                    /*recovery_hint*/ None,
+                )
                 .await;
             let snapshot = world_state.snapshot();
             self.state

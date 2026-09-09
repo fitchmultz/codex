@@ -3498,7 +3498,7 @@ async fn start_new_context_window_persists_checkpoint_state() {
     );
 
     session
-        .start_new_context_window(&step_context, world_state)
+        .start_new_context_window(&step_context, world_state, /*recovery_hint*/ None)
         .await;
 
     let live_history = session.clone_history().await;
@@ -6423,7 +6423,11 @@ async fn build_initial_context(
         .await
         .expect("world state should build");
     session
-        .build_initial_context_with_world_state(&step_context, &world_state)
+        .build_initial_context_with_world_state(
+            &step_context,
+            &world_state,
+            /*recovery_hint*/ None,
+        )
         .await
 }
 
@@ -10129,8 +10133,11 @@ async fn build_initial_context_reuses_in_flight_recommendation_prewarm() {
     // This does not depend on how quickly the HTTP server returns its response.
     let world_state = WorldState::default();
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
-    let initial_context =
-        session.build_initial_context_with_world_state(&step_context, &world_state);
+    let initial_context = session.build_initial_context_with_world_state(
+        &step_context,
+        &world_state,
+        /*recovery_hint*/ None,
+    );
     tokio::pin!(initial_context);
     assert!(futures::poll!(initial_context.as_mut()).is_pending());
 
@@ -10889,7 +10896,7 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
         .unwrap();
     let world_b = session.build_world_state_for_step(&step_b).await.unwrap();
     let initial_b = session
-        .build_initial_context_with_world_state(&step_b, &world_b)
+        .build_initial_context_with_world_state(&step_b, &world_b, /*recovery_hint*/ None)
         .await;
     let turn_contributions_b = session.build_turn_context_contribution_items(&step_b).await;
     let (restored_a, restored_world) =

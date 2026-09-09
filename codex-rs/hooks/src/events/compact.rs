@@ -28,6 +28,8 @@ pub struct PreCompactRequest {
     pub transcript_path: Option<PathBuf>,
     pub model: String,
     pub trigger: String,
+    /// Optional trusted synchronous hook that must finish before local context recovery.
+    pub required_hook_key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,14 +61,22 @@ pub(crate) fn preview_pre(
     handlers: &[ConfiguredHandler],
     request: &PreCompactRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_handlers(
+    let matched = dispatcher::select_handlers(
         handlers,
         HookEventName::PreCompact,
         Some(request.trigger.as_str()),
-    )
-    .into_iter()
-    .map(|handler| dispatcher::running_summary(&handler))
-    .collect()
+    );
+    if let Some(key) = request.required_hook_key.as_deref()
+        && !matched.iter().any(|handler| {
+            handler.key.as_deref() == Some(key) && handler.can_apply_control_effects()
+        })
+    {
+        return Vec::new();
+    }
+    matched
+        .into_iter()
+        .map(|handler| dispatcher::running_summary(&handler))
+        .collect()
 }
 
 pub(crate) async fn run_pre(
@@ -78,6 +88,22 @@ pub(crate) async fn run_pre(
         HookEventName::PreCompact,
         Some(request.trigger.as_str()),
     );
+    let required_run_id = if let Some(key) = request.required_hook_key.as_deref() {
+        let Some(handler) = matched.iter().find(|handler| {
+            handler.key.as_deref() == Some(key) && handler.can_apply_control_effects()
+        }) else {
+            return PreCompactOutcome {
+                hook_events: Vec::new(),
+                should_stop: true,
+                stop_reason: Some(
+                    "Required recovery hook is unavailable. Check its configuration and trust, then retry; context was not reset.".to_string(),
+                ),
+            };
+        };
+        Some(handler.run_id())
+    } else {
+        None
+    };
     if matched.is_empty() {
         return PreCompactOutcome {
             hook_events: Vec::new(),
@@ -95,8 +121,11 @@ pub(crate) async fn run_pre(
                     Some(request.turn_id),
                     format!("failed to serialize pre compact hook input: {error}"),
                 ),
-                should_stop: false,
-                stop_reason: None,
+                should_stop: required_run_id.is_some(),
+                stop_reason: required_run_id.as_ref().map(|_| {
+                    "Required recovery hook input could not be prepared; context was not reset."
+                        .to_string()
+                }),
             };
         }
     };
@@ -110,10 +139,21 @@ pub(crate) async fn run_pre(
         parse_pre_completed,
     )
     .await;
-    let should_stop = results.iter().any(|result| result.data.should_stop);
+    let required_failed = required_run_id.is_some_and(|id| {
+        !results.iter().any(|result| {
+            result.completed.run.id == id && result.completed.run.status == HookRunStatus::Completed
+        })
+    });
+    let should_stop = required_failed || results.iter().any(|result| result.data.should_stop);
     let stop_reason = results
         .iter()
-        .find_map(|result| result.data.stop_reason.clone());
+        .find_map(|result| result.data.stop_reason.clone())
+        .or_else(|| {
+            required_failed.then(|| {
+                "Required recovery hook failed. Fix the hook and retry; context was not reset."
+                    .to_string()
+            })
+        });
     PreCompactOutcome {
         hook_events: results.into_iter().map(|result| result.completed).collect(),
         should_stop,
@@ -505,6 +545,7 @@ mod tests {
             transcript_path: None,
             model: "gpt-test".to_string(),
             trigger: "manual".to_string(),
+            required_hook_key: None,
         }
     }
 
@@ -523,6 +564,7 @@ mod tests {
 
     fn handler(event_name: HookEventName) -> ConfiguredHandler {
         ConfiguredHandler {
+            key: None,
             builtin: false,
             event_name,
             matcher: None,
