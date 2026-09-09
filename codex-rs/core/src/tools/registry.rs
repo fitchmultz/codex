@@ -696,6 +696,13 @@ impl ToolRegistry {
             None
         };
         if let Some(outcome) = &post_tool_use_outcome {
+            if outcome
+                .hook_events
+                .iter()
+                .any(|event| event.run.status == codex_protocol::protocol::HookRunStatus::Stopped)
+            {
+                invocation.step_context.record_tool_failure();
+            }
             record_additional_contexts(
                 &invocation.session,
                 &invocation.turn,

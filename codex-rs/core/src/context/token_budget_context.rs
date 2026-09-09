@@ -131,6 +131,31 @@ impl ContextualUserFragment for ContextWindowGuidance {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ContextWindowResetCancelled;
+
+impl ContextualUserFragment for ContextWindowResetCancelled {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("token_budget.reset_cancelled".to_string())
+    }
+
+    fn role(&self) -> &'static str {
+        "developer"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        ("", "")
+    }
+
+    fn body(&self) -> String {
+        "The requested context reset was cancelled because its tool batch failed, was interrupted, or had a rejected result. The current context and tool results are retained. Resolve the failure before requesting new_context again.".to_string()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TokenBudgetRemainingContext {
     tokens_left: Option<i64>,
 }

@@ -1,6 +1,8 @@
 //! Request-scoped settings and capabilities, including the durable context snapshot.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use crate::agents_md::LoadedAgentsMd;
 use crate::config::TokenBudgetConfig;
@@ -21,6 +23,8 @@ pub(crate) struct StepContext {
     pub(crate) settings: Arc<ResolvedStepSettings>,
     /// Frozen turn preferences resolved against this step's captured model.
     pub(crate) token_budget: Option<TokenBudgetConfig>,
+    /// Shared by direct and nested tool calls in this sampling step.
+    pub(crate) tool_call_failed: AtomicBool,
     /// Telemetry context tagged with this sampling request's model.
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) environments: TurnEnvironmentSnapshot,
@@ -37,6 +41,16 @@ pub(crate) struct StepContext {
 }
 
 impl StepContext {
+    pub(crate) fn record_tool_failure(&self) {
+        if self
+            .token_budget
+            .as_ref()
+            .is_some_and(|config| config.local_recovery_hook.is_some())
+        {
+            self.tool_call_failed.store(true, Ordering::Release);
+        }
+    }
+
     /// Persist the summary captured for this request, even after a live settings update.
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
         let mut item = self.turn.to_turn_context_item();

@@ -113,6 +113,7 @@ pub(crate) use rollout_budget::RolloutBudgetContext;
 pub(crate) use subagent_notification::SubagentNotification;
 pub(crate) use token_budget_context::AutoCompactFallbackPrompt;
 pub(crate) use token_budget_context::ContextWindowGuidance;
+pub(crate) use token_budget_context::ContextWindowResetCancelled;
 pub(crate) use token_budget_context::TokenBudgetContext;
 pub(crate) use token_budget_context::TokenBudgetRemainingContext;
 pub(crate) use token_budget_context::TokenBudgetReminder;

@@ -3703,6 +3703,7 @@ impl Session {
         Ok(Arc::new(StepContext {
             settings,
             token_budget,
+            tool_call_failed: Default::default(),
             session_telemetry,
             turn: turn_context,
             environments,
