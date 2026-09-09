@@ -359,6 +359,7 @@ fn submit_nested_tool(
         input,
     } = invocation;
     if is_exec_tool_name(&tool_name) {
+        tool_runtime.step_context.record_tool_failure();
         return Err(FunctionCallError::RespondToModel(format!(
             "{PUBLIC_TOOL_NAME} cannot invoke itself"
         )));
@@ -366,7 +367,10 @@ fn submit_nested_tool(
 
     let payload = match build_nested_tool_payload(tool_kind, &tool_name, input) {
         Ok(payload) => payload,
-        Err(error) => return Err(FunctionCallError::RespondToModel(error)),
+        Err(error) => {
+            tool_runtime.step_context.record_tool_failure();
+            return Err(FunctionCallError::RespondToModel(error));
+        }
     };
 
     let call = ToolCall {

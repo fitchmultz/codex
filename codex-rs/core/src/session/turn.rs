@@ -507,8 +507,25 @@ pub(crate) async fn run_turn(
                     );
                 }
 
-                let should_roll_over = needs_follow_up
-                    && (sess.take_new_context_window_request().await || token_limit_reached);
+                let reset_requested =
+                    needs_follow_up && sess.take_new_context_window_request().await;
+                let reset_cancelled = reset_requested
+                    && step_context
+                        .token_budget
+                        .as_ref()
+                        .is_some_and(|config| config.local_recovery_hook.is_some())
+                    && step_context.tool_call_failed.load(Ordering::Acquire);
+                if reset_cancelled {
+                    let response_item =
+                        ContextualUserFragment::into(crate::context::ContextWindowResetCancelled);
+                    sess.record_conversation_items(
+                        turn_context.as_ref(),
+                        std::slice::from_ref(&response_item),
+                    )
+                    .await;
+                }
+                let should_roll_over =
+                    needs_follow_up && !reset_cancelled && (reset_requested || token_limit_reached);
                 let allow_auto_compact_fallback = !should_roll_over && !token_limit_reached;
                 super::token_budget::maybe_record(
                     sess.as_ref(),
@@ -1484,20 +1501,38 @@ async fn run_sampling_request(
             Ok(output) => {
                 return Ok((output, original_input.unwrap_or(prompt.input)));
             }
-            Err(err) => match err.details() {
-                CodexErrorDetails::ContextWindowExceeded => {
-                    sess.set_total_tokens_full(&turn_context).await;
-                    return Err(err);
-                }
-                CodexErrorDetails::UsageLimitReached(e) => {
-                    let rate_limits = e.rate_limits.clone();
-                    if let Some(rate_limits) = rate_limits {
-                        sess.update_rate_limits(&turn_context, *rate_limits).await;
+            Err(err) => {
+                if step_context
+                    .token_budget
+                    .as_ref()
+                    .is_some_and(|config| config.local_recovery_hook.is_some())
+                {
+                    if sess.take_new_context_window_request().await {
+                        let cancelled = ContextualUserFragment::into(
+                            crate::context::ContextWindowResetCancelled,
+                        );
+                        sess.record_conversation_items(&turn_context, &[cancelled])
+                            .await;
                     }
-                    return Err(err);
+                    step_context
+                        .tool_call_failed
+                        .store(false, Ordering::Release);
                 }
-                _ => err,
-            },
+                match err.details() {
+                    CodexErrorDetails::ContextWindowExceeded => {
+                        sess.set_total_tokens_full(&turn_context).await;
+                        return Err(err);
+                    }
+                    CodexErrorDetails::UsageLimitReached(e) => {
+                        let rate_limits = e.rate_limits.clone();
+                        if let Some(rate_limits) = rate_limits {
+                            sess.update_rate_limits(&turn_context, *rate_limits).await;
+                        }
+                        return Err(err);
+                    }
+                    _ => err,
+                }
+            }
         };
 
         if original_input.is_none() {

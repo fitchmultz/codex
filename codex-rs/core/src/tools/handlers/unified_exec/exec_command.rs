@@ -446,13 +446,19 @@ impl ExecCommandHandler {
             None => manager.exec_command(request, &context).await,
         };
         match result {
-            Ok(response) => Ok(boxed_tool_output(response)),
+            Ok(response) => {
+                if response.exit_code.is_some_and(|code| code != 0) {
+                    context.step_context.record_tool_failure();
+                }
+                Ok(boxed_tool_output(response))
+            }
             Err(UnifiedExecError::SandboxDenied {
                 output,
                 original_token_count,
                 output_omitted_bytes,
                 ..
             }) => {
+                context.step_context.record_tool_failure();
                 let output_text = output.aggregated_output.text;
                 let original_token_count =
                     original_token_count.unwrap_or_else(|| approx_token_count(&output_text));

@@ -1204,7 +1204,16 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     }
 
     if features.enabled(Feature::TokenBudget) {
-        registry.add_with_exposure(NewContextWindowHandler, ToolExposure::DirectModelOnly);
+        let reset_exposure = if turn_context
+            .configured_token_budget
+            .as_ref()
+            .is_some_and(|config| config.local_recovery_hook.is_some())
+        {
+            ToolExposure::Direct
+        } else {
+            ToolExposure::DirectModelOnly
+        };
+        registry.add_with_exposure(NewContextWindowHandler, reset_exposure);
         registry.add(GetContextRemainingHandler);
     }
 

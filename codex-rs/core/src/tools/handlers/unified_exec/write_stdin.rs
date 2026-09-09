@@ -112,6 +112,9 @@ impl WriteStdinHandler {
                 FunctionCallError::RespondToModel(message)
             })?;
 
+        if response.exit_code.is_some_and(|code| code != 0) {
+            context.step_context.record_tool_failure();
+        }
         Ok(boxed_tool_output(response))
     }
 }

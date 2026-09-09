@@ -38,7 +38,16 @@ impl ToolExecutor<ToolInvocation> for NewContextWindowHandler {
             invocation.session.request_new_context_window().await;
 
             Ok(boxed_tool_output(FunctionToolOutput::from_text(
-                NEW_CONTEXT_WINDOW_MESSAGE.to_string(),
+                if invocation
+                    .step_context
+                    .token_budget
+                    .as_ref()
+                    .is_some_and(|config| config.local_recovery_hook.is_some())
+                {
+                    "Requested a new context window after this tool batch succeeds, without summarizing conversation history.".to_string()
+                } else {
+                    NEW_CONTEXT_WINDOW_MESSAGE.to_string()
+                },
                 Some(true),
             )))
         })

@@ -42,7 +42,7 @@ struct ToolCallTimingGuard {
 pub(crate) struct ToolCallRuntime {
     session: Arc<Session>,
     // Tool calls may run later, so retain the step whose tool list advertised them.
-    step_context: Arc<StepContext>,
+    pub(super) step_context: Arc<StepContext>,
     tracker: SharedTurnDiffTracker,
     parallel_execution: Arc<RwLock<()>>,
 }
@@ -172,7 +172,8 @@ impl ToolCallRuntime {
 
         async move {
             let _tool_call_timing_guard = tool_call_timing_guard;
-            tokio::select! {
+            let result = async {
+                tokio::select! {
                 res = &mut dispatch_handle => res.map_err(Self::tool_task_join_error)?,
                 _ = cancellation_token.cancelled() => {
                     if terminal_outcome_reached.load(Ordering::Acquire) || dispatch_handle.is_finished() {
@@ -198,7 +199,16 @@ impl ToolCallRuntime {
                         Ok(response)
                     }
                 },
+                }
             }
+            .await;
+            if !result
+                .as_ref()
+                .is_ok_and(|result| result.result.success_for_logging())
+            {
+                self.step_context.record_tool_failure();
+            }
+            result
         }
         .in_current_span()
     }
